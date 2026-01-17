@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-900 text-gray-100;
+  }
+}
+
+@layer utilities {
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@keyframes panel-zoom-in {
+  0% {
+    opacity: 0;
+    transform: scale(var(--panel-start-scale));
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.panel-zoom {
+  transform-origin: top left;
+  animation: panel-zoom-in 520ms ease-out 120ms both;
+}
