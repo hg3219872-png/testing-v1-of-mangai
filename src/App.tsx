@@ -104,7 +104,14 @@ function App() {
 
     workerInitRef.current = (async () => {
       const worker = await createWorker({
+        logger: (message) => {
+          if (message.status === 'recognizing text') {
+            console.debug('OCR progress:', Math.round(message.progress * 100), '%')
+          }
+        },
         langPath: 'https://tessdata.projectnaptha.com/4.0.0',
+        workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js',
+        corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5/tesseract-core.wasm.js',
       })
       await worker.loadLanguage('jpn+eng')
       await worker.initialize('jpn+eng')
@@ -133,7 +140,11 @@ function App() {
     return loaded
   }
 
-  const getPanelCanvas = async (panel: FramedPanel, page: PageData) => {
+  const getPanelCanvas = async (
+    panel: FramedPanel,
+    page: PageData,
+    mode: 'binarized' | 'grayscale'
+  ) => {
     const image = await loadImage(page.imageUrl)
     const { x, y, width, height } = panel.boundingBox
     const canvas = document.createElement('canvas')
@@ -150,7 +161,7 @@ function App() {
       const g = data[i + 1]
       const b = data[i + 2]
       const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
-      const value = luminance > 180 ? 255 : 0
+      const value = mode === 'binarized' ? (luminance > 180 ? 255 : 0) : luminance
       data[i] = value
       data[i + 1] = value
       data[i + 2] = value
@@ -169,15 +180,24 @@ function App() {
 
     const promise = (async () => {
       const worker = await getOcrWorker()
-      const canvas = await getPanelCanvas(panel, page)
-      const result = await worker.recognize(canvas)
-      const text = result.data.text.trim()
+      const binCanvas = await getPanelCanvas(panel, page, 'binarized')
+      let result = await worker.recognize(binCanvas)
+      let text = result.data.text.trim()
+
+      if (!text) {
+        await worker.setParameters({ tessedit_pageseg_mode: '11' })
+        const grayCanvas = await getPanelCanvas(panel, page, 'grayscale')
+        result = await worker.recognize(grayCanvas)
+        text = result.data.text.trim()
+        await worker.setParameters({ tessedit_pageseg_mode: '6' })
+      }
+
       if (!text) {
         console.debug('OCR: no text detected for panel', panel.id)
-      }
-      if (text) {
+      } else {
         ocrCacheRef.current.set(panel.id, text)
       }
+
       return text
     })()
 
