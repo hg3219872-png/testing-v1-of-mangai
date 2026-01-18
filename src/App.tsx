@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import Tesseract from 'tesseract.js'
+import { createWorker } from 'tesseract.js'
 import ProcessingIndicator from './components/ProcessingIndicator'
 import PanelViewer from './components/PanelViewer'
 import PDFUpload from './components/PDFUpload'
@@ -31,6 +31,8 @@ function App() {
   const ocrInFlightRef = useRef<Map<string, Promise<string>>>(new Map())
   const imageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map())
   const currentPanelIdRef = useRef<string | null>(null)
+  const workerRef = useRef<Awaited<ReturnType<typeof createWorker>> | null>(null)
+  const workerInitRef = useRef<Promise<Awaited<ReturnType<typeof createWorker>>> | null>(null)
   const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1920
   const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 1080
   const voiceName = 'Laura - Enthusiast, Quirky Attitude'
@@ -96,6 +98,26 @@ function App() {
     }
   }
 
+  const getOcrWorker = async () => {
+    if (workerRef.current) return workerRef.current
+    if (workerInitRef.current) return workerInitRef.current
+
+    workerInitRef.current = (async () => {
+      const worker = await createWorker({
+        langPath: 'https://tessdata.projectnaptha.com/4.0.0',
+      })
+      await worker.loadLanguage('jpn+eng')
+      await worker.initialize('jpn+eng')
+      await worker.setParameters({
+        tessedit_pageseg_mode: '6',
+      })
+      workerRef.current = worker
+      return worker
+    })()
+
+    return workerInitRef.current
+  }
+
   const loadImage = async (src: string) => {
     const cached = imageCacheRef.current.get(src)
     if (cached) return cached
@@ -111,15 +133,31 @@ function App() {
     return loaded
   }
 
-  const getPanelImageDataUrl = async (panel: FramedPanel, page: PageData) => {
+  const getPanelCanvas = async (panel: FramedPanel, page: PageData) => {
     const image = await loadImage(page.imageUrl)
     const { x, y, width, height } = panel.boundingBox
     const canvas = document.createElement('canvas')
-    canvas.width = Math.max(1, Math.round(width))
-    canvas.height = Math.max(1, Math.round(height))
+    const scale = 2
+    canvas.width = Math.max(1, Math.round(width * scale))
+    canvas.height = Math.max(1, Math.round(height * scale))
     const ctx = canvas.getContext('2d')!
     ctx.drawImage(image, x, y, width, height, 0, 0, canvas.width, canvas.height)
-    return canvas.toDataURL('image/png')
+
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    const data = imageData.data
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i]
+      const g = data[i + 1]
+      const b = data[i + 2]
+      const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+      const value = luminance > 180 ? 255 : 0
+      data[i] = value
+      data[i + 1] = value
+      data[i + 2] = value
+    }
+    ctx.putImageData(imageData, 0, 0)
+
+    return canvas
   }
 
   const getOcrText = async (panel: FramedPanel, page: PageData) => {
@@ -130,9 +168,13 @@ function App() {
     if (existing) return existing
 
     const promise = (async () => {
-      const dataUrl = await getPanelImageDataUrl(panel, page)
-      const result = await Tesseract.recognize(dataUrl, 'jpn')
+      const worker = await getOcrWorker()
+      const canvas = await getPanelCanvas(panel, page)
+      const result = await worker.recognize(canvas)
       const text = result.data.text.trim()
+      if (!text) {
+        console.debug('OCR: no text detected for panel', panel.id)
+      }
       if (text) {
         ocrCacheRef.current.set(panel.id, text)
       }
@@ -198,6 +240,9 @@ function App() {
     ocrInFlightRef.current.clear()
     imageCacheRef.current.clear()
     currentPanelIdRef.current = null
+    workerRef.current?.terminate()
+    workerRef.current = null
+    workerInitRef.current = null
     setAppState('processing')
     setProgress({ stage: 'upload', current: 1, total: 1, message: 'Uploading PDF...' })
 
