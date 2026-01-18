@@ -8,6 +8,48 @@ const PORT = process.env.PORT || 5174
 
 app.use(express.json({ limit: '1mb' }))
 
+const voiceCache = {
+  map: new Map(),
+  updatedAt: 0,
+}
+
+const resolveVoiceId = async ({ apiKey, voiceId, voiceName }) => {
+  if (typeof voiceId === 'string' && voiceId.trim()) {
+    return voiceId.trim()
+  }
+
+  if (typeof voiceName === 'string' && voiceName.trim()) {
+    const name = voiceName.trim()
+    const cached = voiceCache.map.get(name)
+    if (cached) return cached
+
+    const now = Date.now()
+    const isStale = now - voiceCache.updatedAt > 10 * 60 * 1000
+    if (isStale) {
+      const response = await fetch('https://api.elevenlabs.io/v1/voices', {
+        headers: { 'xi-api-key': apiKey },
+      })
+      if (response.ok) {
+        const data = await response.json()
+        if (Array.isArray(data?.voices)) {
+          voiceCache.map.clear()
+          data.voices.forEach((voice) => {
+            if (voice?.name && voice?.voice_id) {
+              voiceCache.map.set(voice.name, voice.voice_id)
+            }
+          })
+          voiceCache.updatedAt = now
+        }
+      }
+    }
+
+    const resolved = voiceCache.map.get(name)
+    if (resolved) return resolved
+  }
+
+  return process.env.ELEVENLABS_VOICE_ID || 'pNInz6obpgDQGcFmaJgB'
+}
+
 const loadLocalEnv = () => {
   const envPath = path.resolve(process.cwd(), '.env.local')
   if (!fs.existsSync(envPath)) return
@@ -61,7 +103,7 @@ app.post('/api/mangaread', async (req, res) => {
 
 app.post('/api/tts/elevenlabs', async (req, res) => {
   try {
-    const { text, voiceId, voiceSettings } = req.body || {}
+    const { text, voiceId, voiceName, voiceSettings } = req.body || {}
     if (!text || typeof text !== 'string') {
       return res.status(400).json({ error: 'Missing text' })
     }
@@ -71,10 +113,7 @@ app.post('/api/tts/elevenlabs', async (req, res) => {
       return res.status(500).json({ error: 'Missing ELEVENLABS_API_KEY' })
     }
 
-    const selectedVoiceId =
-      typeof voiceId === 'string' && voiceId.trim().length > 0
-        ? voiceId.trim()
-        : process.env.ELEVENLABS_VOICE_ID || 'pNInz6obpgDQGcFmaJgB'
+    const selectedVoiceId = await resolveVoiceId({ apiKey, voiceId, voiceName })
 
     const safeVoiceSettings = {
       stability: 0.4,

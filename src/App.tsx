@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import Tesseract from 'tesseract.js'
 import ProcessingIndicator from './components/ProcessingIndicator'
 import PanelViewer from './components/PanelViewer'
 import PDFUpload from './components/PDFUpload'
@@ -24,8 +25,15 @@ function App() {
     message: 'Ready to upload',
   })
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const ttsAbortRef = useRef<AbortController | null>(null)
+  const ocrCacheRef = useRef<Map<string, string>>(new Map())
+  const ocrInFlightRef = useRef<Map<string, Promise<string>>>(new Map())
+  const imageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map())
+  const currentPanelIdRef = useRef<string | null>(null)
   const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1920
   const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 1080
+  const voiceName = 'Laura - Enthusiast, Quirky Attitude'
 
   useEffect(() => {
     const handleResize = () => {
@@ -81,6 +89,64 @@ function App() {
     }
   }, [appState])
 
+  const stopAudio = () => {
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current = null
+    }
+  }
+
+  const loadImage = async (src: string) => {
+    const cached = imageCacheRef.current.get(src)
+    if (cached) return cached
+
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    const loaded = await new Promise<HTMLImageElement>((resolve, reject) => {
+      img.onload = () => resolve(img)
+      img.onerror = () => reject(new Error('Failed to load image for OCR'))
+      img.src = src
+    })
+    imageCacheRef.current.set(src, loaded)
+    return loaded
+  }
+
+  const getPanelImageDataUrl = async (panel: FramedPanel, page: PageData) => {
+    const image = await loadImage(page.imageUrl)
+    const { x, y, width, height } = panel.boundingBox
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(width))
+    canvas.height = Math.max(1, Math.round(height))
+    const ctx = canvas.getContext('2d')!
+    ctx.drawImage(image, x, y, width, height, 0, 0, canvas.width, canvas.height)
+    return canvas.toDataURL('image/png')
+  }
+
+  const getOcrText = async (panel: FramedPanel, page: PageData) => {
+    const cached = ocrCacheRef.current.get(panel.id)
+    if (cached) return cached
+
+    const existing = ocrInFlightRef.current.get(panel.id)
+    if (existing) return existing
+
+    const promise = (async () => {
+      const dataUrl = await getPanelImageDataUrl(panel, page)
+      const result = await Tesseract.recognize(dataUrl, 'jpn')
+      const text = result.data.text.trim()
+      if (text) {
+        ocrCacheRef.current.set(panel.id, text)
+      }
+      return text
+    })()
+
+    ocrInFlightRef.current.set(panel.id, promise)
+    try {
+      return await promise
+    } finally {
+      ocrInFlightRef.current.delete(panel.id)
+    }
+  }
+
 
   // Keyboard navigation
   useEffect(() => {
@@ -126,6 +192,12 @@ function App() {
     })
     
     setIsPlaying(false)
+    stopAudio()
+    ttsAbortRef.current?.abort()
+    ocrCacheRef.current.clear()
+    ocrInFlightRef.current.clear()
+    imageCacheRef.current.clear()
+    currentPanelIdRef.current = null
     setAppState('processing')
     setProgress({ stage: 'upload', current: 1, total: 1, message: 'Uploading PDF...' })
 
@@ -231,6 +303,56 @@ function App() {
     ? pages[currentFramedPanel.pageIndex]
     : null
 
+  useEffect(() => {
+    if (appState !== 'viewing' || !currentFramedPanel || !currentPageData) return
+
+    const panelId = currentFramedPanel.id
+    currentPanelIdRef.current = panelId
+    stopAudio()
+    ttsAbortRef.current?.abort()
+    const controller = new AbortController()
+    ttsAbortRef.current = controller
+
+    const run = async () => {
+      const text = await getOcrText(currentFramedPanel, currentPageData)
+      if (!text) return
+      if (currentPanelIdRef.current !== panelId) return
+
+      const response = await fetch('/api/tts/elevenlabs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text,
+          voiceName,
+        }),
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.warn('TTS failed:', errorText)
+        return
+      }
+
+      const audioBlob = await response.blob()
+      if (controller.signal.aborted) return
+
+      const audioUrl = URL.createObjectURL(audioBlob)
+      const audio = new Audio(audioUrl)
+      audioRef.current = audio
+      audio.onended = () => {
+        URL.revokeObjectURL(audioUrl)
+      }
+      await audio.play()
+    }
+
+    void run()
+
+    return () => {
+      controller.abort()
+    }
+  }, [appState, currentFramedPanel?.id, currentPageData?.imageUrl])
+
   return (
     <div className="min-h-screen bg-gray-900 flex flex-col">
       {/* Main Content */}
@@ -252,7 +374,7 @@ function App() {
                   framedPanel={currentFramedPanel}
                   pageData={currentPageData}
                   viewportWidth={viewportWidth}
-                  viewportHeight={viewportHeight - 200} // Reserve space for controls
+                  viewportHeight={viewportHeight}
                   panelIndex={currentPanelIndex}
                 />
               </div>

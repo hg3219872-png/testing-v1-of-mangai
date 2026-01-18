@@ -5,5 +5,10 @@ export default defineConfig({
   plugins: [react()],
   optimizeDeps: {
     exclude: ['pdfjs-dist']
+  },
+  server: {
+    proxy: {
+      '/api': 'http://localhost:5174'
+    }
   }
 })
