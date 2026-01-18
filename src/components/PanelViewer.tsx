@@ -66,15 +66,10 @@ const PanelViewer = ({
     const containerAspectRatio = containerWidth / containerHeight
     let bgWidth = containerWidth
     let bgHeight = containerHeight
-    let bgX = 0
-    let bgY = 0
-
     if (pageAspectRatio > containerAspectRatio) {
       bgHeight = containerWidth / pageAspectRatio
-      bgY = (containerHeight - bgHeight) / 2
     } else {
       bgWidth = containerHeight * pageAspectRatio
-      bgX = (containerWidth - bgWidth) / 2
     }
 
     // Cap panel height to background image height
