@@ -4,7 +4,7 @@ import express from 'express'
 import { buildPdfBuffer, deriveOutputName, fetchChapterImages } from '../scripts/mangaread-core.js'
 
 const app = express()
-const PORT = process.env.PORT || 5174
+const PORT = process.env.PORT || 5175
 
 app.use(express.json({ limit: '1mb' }))
 
