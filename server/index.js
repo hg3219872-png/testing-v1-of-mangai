@@ -163,6 +163,11 @@ app.post('/api/tts/elevenlabs', async (req, res) => {
   }
 })
 
+app.get('/', (_req, res) => {
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173/'
+  res.redirect(frontendUrl)
+})
+
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok' })
 })
