@@ -8,6 +8,13 @@ const PORT = process.env.PORT || 5175
 
 app.use(express.json({ limit: '1mb' }))
 
+const distPath = path.resolve(process.cwd(), 'dist')
+const hasDist = fs.existsSync(distPath)
+
+if (hasDist) {
+  app.use(express.static(distPath))
+}
+
 const voiceCache = {
   map: new Map(),
   updatedAt: 0,
@@ -163,14 +170,15 @@ app.post('/api/tts/elevenlabs', async (req, res) => {
   }
 })
 
-app.get('/', (_req, res) => {
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173/'
-  res.redirect(frontendUrl)
-})
-
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok' })
 })
+
+if (hasDist) {
+  app.get(/^(?!\/api).*/, (req, res) => {
+    res.sendFile(path.join(distPath, 'index.html'))
+  })
+}
 
 app.listen(PORT, () => {
   console.log(`Manga PDF server listening on http://localhost:${PORT}`)
